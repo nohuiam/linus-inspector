@@ -1,0 +1,62 @@
+{
+  "server": {
+    "name": "linus-inspector",
+    "version": "1.0.0",
+    "description": "Brutal quality gate for neurogenesis-generated servers"
+  },
+  "ports": {
+    "udp": 3037,
+    "http": 8037,
+    "websocket": 9037
+  },
+  "signals": {
+    "emits": [
+      { "code": "0xC4", "name": "INSPECTION_PASSED", "description": "Build passed all inspections" },
+      { "code": "0xC5", "name": "INSPECTION_FAILED", "description": "Build failed inspection with issues" },
+      { "code": "0xC7", "name": "LESSON_EXTRACTED", "description": "New lesson extracted from inspection failure" },
+      { "code": "0xD0", "name": "PRE_INSPECTION_COMPLETE", "description": "Pre-build API/prompt/skill inspection done" },
+      { "code": "0xD1", "name": "CONNECTION_TEST_RESULT", "description": "Live connection test completed" }
+    ],
+    "receives": [
+      { "code": "0xC0", "name": "BUILD_STARTED", "description": "Neurogenesis started a build" },
+      { "code": "0xC3", "name": "INSPECTION_REQUESTED", "description": "Request to inspect generated code" },
+      { "code": "0xD2", "name": "PRE_INSPECTION_REQUESTED", "description": "Request to probe SaaS API before build" },
+      { "code": "0xD3", "name": "SKILL_VALIDATION_REQUESTED", "description": "Request to validate a skill file" },
+      { "code": "0xD4", "name": "PROMPT_VALIDATION_REQUESTED", "description": "Request to validate a prompt" }
+    ]
+  },
+  "peers": [
+    { "name": "neurogenesis-engine", "port": 3010, "role": "primary-client" },
+    { "name": "experience-layer", "port": 3031, "role": "lesson-storage" },
+    { "name": "skill-builder", "port": 3029, "role": "skill-validation" },
+    { "name": "research-bus", "port": 3019, "role": "api-documentation" },
+    { "name": "context-guardian", "port": 3001, "role": "safety-validation" },
+    { "name": "tenets-server", "port": 3027, "role": "ethical-checks" },
+    { "name": "verifier-mcp", "port": 3021, "role": "claim-verification" },
+    { "name": "toolee", "port": 3004, "role": "tool-registry" },
+    { "name": "percolation-server", "port": 3030, "role": "stress-testing" },
+    { "name": "consciousness-mcp", "port": 3028, "role": "pattern-detection" },
+    { "name": "health-monitor", "port": 3024, "role": "health-metrics" },
+    { "name": "consolidation-engine", "port": 3032, "role": "documentation" }
+  ],
+  "inspection": {
+    "modes": ["pre-build", "build", "runtime"],
+    "categories": [
+      "code-quality",
+      "prompt-inspection",
+      "skill-validation",
+      "saas-api-inspection",
+      "connection-testing",
+      "ecosystem-integration",
+      "template-validation",
+      "documentation-validation",
+      "test-coverage"
+    ],
+    "severities": {
+      "CRITICAL": { "blocks": true, "auto_fixable": true },
+      "HIGH": { "blocks": true, "auto_fixable": true },
+      "MEDIUM": { "blocks": false, "auto_fixable": true },
+      "LOW": { "blocks": false, "auto_fixable": false }
+    }
+  }
+}
