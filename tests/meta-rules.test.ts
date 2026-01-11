@@ -166,7 +166,7 @@ describe('Meta-Rules', () => {
       const codeWithHardcodedKey = `
         // Security inspector
         const checkCredentials = (code) => code.includes('api_key');
-        const myApiKey = "HARDCODED_SECRET_12345_TEST_VALUE";
+        const api_key = "testfakekeynotreal1234567890abcdef";
       `;
 
       const violations = checkMetaRules(codeWithHardcodedKey, context);
