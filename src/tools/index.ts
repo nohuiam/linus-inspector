@@ -62,6 +62,7 @@ import {
   getComplianceRules
 } from '../database/index.js';
 import { inspectSelf, InspectSelfSchema, type SelfInspectionResult } from './inspect-self.js';
+import { detectServerProfile, type ServerProfile } from '../profiler/index.js';
 
 // Tool schemas
 export const InspectBuildSchema = z.object({
@@ -812,10 +813,26 @@ export const tools = {
     }
   },
 
+  // === Profile Detection Tools ===
+
+  /**
+   * 26. Detect Server Profile
+   * Analyze a server to determine its capabilities and applicable rules
+   */
+  detect_server_profile: {
+    description: 'Detect server profile to determine which inspection rules apply. Reduces false positives by identifying server type (api-consumer, api-provider, passive-observer, etc.) and capabilities (external APIs, OAuth, webhooks, etc.)',
+    schema: z.object({
+      server_path: z.string().describe('Absolute path to server directory')
+    }),
+    handler: async (params: { server_path: string }): Promise<ServerProfile> => {
+      return detectServerProfile(params.server_path);
+    }
+  },
+
   // === Self-Inspection (Physician Heal Thyself) ===
 
   /**
-   * 26. Inspect Self
+   * 27. Inspect Self
    * Run all inspections on linus-inspector itself
    */
   inspect_self: {

@@ -10,14 +10,14 @@
     "websocket": 9037
   },
   "signals": {
-    "emits": [
+    "emit": [
       { "code": "0xC4", "name": "INSPECTION_PASSED", "description": "Build passed all inspections" },
       { "code": "0xC5", "name": "INSPECTION_FAILED", "description": "Build failed inspection with issues" },
       { "code": "0xC7", "name": "LESSON_EXTRACTED", "description": "New lesson extracted from inspection failure" },
       { "code": "0xD0", "name": "PRE_INSPECTION_COMPLETE", "description": "Pre-build API/prompt/skill inspection done" },
       { "code": "0xD1", "name": "CONNECTION_TEST_RESULT", "description": "Live connection test completed" }
     ],
-    "receives": [
+    "listen": [
       { "code": "0xC0", "name": "BUILD_STARTED", "description": "Neurogenesis started a build" },
       { "code": "0xC3", "name": "INSPECTION_REQUESTED", "description": "Request to inspect generated code" },
       { "code": "0xD2", "name": "PRE_INSPECTION_REQUESTED", "description": "Request to probe SaaS API before build" },

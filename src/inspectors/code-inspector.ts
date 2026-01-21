@@ -3,6 +3,8 @@
  *
  * Runs all code-level inspections using research-backed rules.
  * Used for Build Mode inspections.
+ *
+ * Now supports profile-aware inspection to reduce false positives.
  */
 
 import { readFileSync, readdirSync, statSync } from 'fs';
@@ -10,7 +12,9 @@ import { join, extname } from 'path';
 import { glob } from 'glob';
 import {
   runAllInspections,
+  runProfileAwareInspections,
   type FullInspectionResult,
+  type ProfileAwareInspectionResult,
   type AnyViolation,
   SUPPORTED_VENDORS,
   SUPPORTED_REGULATIONS
@@ -21,6 +25,10 @@ import {
   updateInspectionVerdict,
   generateId
 } from '../database/index.js';
+import {
+  detectServerProfile,
+  type ServerProfile
+} from '../profiler/index.js';
 
 export interface CodeInspectionOptions {
   server_path: string;
@@ -30,6 +38,8 @@ export interface CodeInspectionOptions {
   regulation?: string;
   industry?: string;
   build_id?: string;
+  use_profile?: boolean;  // Enable profile-aware inspection (default: true)
+  show_skipped?: boolean; // Include skipped rules in output
 }
 
 export interface CodeInspectionResult {
@@ -56,6 +66,10 @@ export interface CodeInspectionResult {
     auto_fixable: boolean;
   }>;
   duration_ms: number;
+  // Profile-aware fields (present when use_profile=true)
+  profile?: ServerProfile;
+  skipped_categories?: { category: string; reason: string }[];
+  applied_categories?: string[];
 }
 
 /**
@@ -149,7 +163,7 @@ async function getCodeFiles(serverPath: string): Promise<string[]> {
 }
 
 /**
- * Inspect a single code file
+ * Inspect a single code file (legacy - no profile filtering)
  */
 function inspectFile(
   filePath: string,
@@ -177,11 +191,53 @@ function inspectFile(
 }
 
 /**
+ * Inspect a single code file with profile-aware filtering
+ */
+function inspectFileWithProfile(
+  filePath: string,
+  profile: ServerProfile,
+  vendor?: string,
+  regulation?: string
+): { violations: AnyViolation[]; category_results: Map<string, AnyViolation[]>; result: ProfileAwareInspectionResult } {
+  let code: string;
+  try {
+    code = readFileSync(filePath, 'utf-8');
+  } catch (error) {
+    const emptyResult: ProfileAwareInspectionResult = {
+      results: [],
+      summary: { total_violations: 0, critical: 0, high: 0, medium: 0, low: 0, auto_fixable: 0 },
+      verdict: 'PASSED',
+      profile,
+      skipped_categories: [],
+      applied_categories: []
+    };
+    return { violations: [], category_results: new Map(), result: emptyResult };
+  }
+
+  const result = runProfileAwareInspections(code, profile, { vendor, regulation });
+
+  const categoryResults = new Map<string, AnyViolation[]>();
+  for (const categoryResult of result.results) {
+    categoryResults.set(categoryResult.category, categoryResult.violations);
+  }
+
+  return {
+    violations: result.results.flatMap(r => r.violations),
+    category_results: categoryResults,
+    result
+  };
+}
+
+/**
  * Main code inspection function
+ *
+ * By default, uses profile-aware inspection to reduce false positives.
+ * Set use_profile: false to use legacy mode that applies all rules.
  */
 export async function inspectCode(options: CodeInspectionOptions): Promise<CodeInspectionResult> {
   const startTime = Date.now();
   const buildId = options.build_id || generateId('build');
+  const useProfile = options.use_profile !== false; // Default to true
 
   // Get server name from path if not provided
   const serverName = options.server_name || options.server_path.split('/').pop() || 'unknown';
@@ -210,11 +266,23 @@ export async function inspectCode(options: CodeInspectionOptions): Promise<CodeI
   const vendor = options.vendor || detectVendor(sampleCode, configContent);
   const regulation = options.regulation || detectRegulation(sampleCode, configContent);
 
+  // Detect server profile if using profile-aware mode
+  let profile: ServerProfile | undefined;
+  let skippedCategories: { category: string; reason: string }[] = [];
+  let appliedCategories: string[] = [];
+
+  if (useProfile) {
+    profile = await detectServerProfile(options.server_path);
+    console.error(`[Profile] Detected server type: ${profile.type}`);
+    console.error(`[Profile] Capabilities: external_apis=${profile.hasExternalAPIs}, oauth=${profile.hasOAuth}, webhooks=${profile.hasWebhooks}, mcp=${profile.isMCPServer}, http=${profile.hasHTTPLayer}`);
+    console.error(`[Profile] Confidence: ${(profile.confidence * 100).toFixed(0)}% (patterns: ${profile.detectedPatterns.length})`);
+  }
+
   // Create inspection record
   const inspection = createInspection({
     build_id: buildId,
     server_name: serverName,
-    server_type: options.server_type,
+    server_type: options.server_type || (profile?.type),
     industry: options.industry,
     mode: 'build',
     verdict: 'PASSED', // Will be updated
@@ -237,7 +305,24 @@ export async function inspectCode(options: CodeInspectionOptions): Promise<CodeI
   // Inspect each file
   for (const filePath of codeFiles) {
     const relativePath = filePath.replace(options.server_path, '').replace(/^\//, '');
-    const { violations } = inspectFile(filePath, vendor, regulation);
+
+    let violations: AnyViolation[];
+
+    if (useProfile && profile) {
+      // Profile-aware inspection
+      const { violations: fileViolations, result } = inspectFileWithProfile(filePath, profile, vendor, regulation);
+      violations = fileViolations;
+
+      // Track categories (only need to do once)
+      if (skippedCategories.length === 0) {
+        skippedCategories = result.skipped_categories;
+        appliedCategories = result.applied_categories;
+      }
+    } else {
+      // Legacy inspection (all rules)
+      const { violations: fileViolations } = inspectFile(filePath, vendor, regulation);
+      violations = fileViolations;
+    }
 
     for (const violation of violations) {
       // Create issue record
@@ -307,7 +392,16 @@ export async function inspectCode(options: CodeInspectionOptions): Promise<CodeI
     duration_ms: durationMs
   });
 
-  return {
+  // Log profile results if using profile-aware mode
+  if (useProfile && options.show_skipped) {
+    console.error(`[Profile] Skipped categories (${skippedCategories.length}):`);
+    for (const skip of skippedCategories) {
+      console.error(`  - ${skip.category}: ${skip.reason}`);
+    }
+    console.error(`[Profile] Applied categories: ${appliedCategories.join(', ')}`);
+  }
+
+  const result: CodeInspectionResult = {
     inspection_id: inspection.id,
     build_id: buildId,
     server_name: serverName,
@@ -324,6 +418,15 @@ export async function inspectCode(options: CodeInspectionOptions): Promise<CodeI
     issues: allIssues,
     duration_ms: durationMs
   };
+
+  // Add profile information if using profile-aware mode
+  if (useProfile && profile) {
+    result.profile = profile;
+    result.skipped_categories = skippedCategories;
+    result.applied_categories = appliedCategories;
+  }
+
+  return result;
 }
 
 /**

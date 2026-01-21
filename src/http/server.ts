@@ -29,6 +29,7 @@ import {
   isClientError
 } from './middleware.js';
 import { inspectSelf } from '../tools/inspect-self.js';
+import { tools } from '../tools/index.js';
 
 export function createHttpServer(port: number): express.Application {
   const app = express();
@@ -194,6 +195,46 @@ export function createHttpServer(port: number): express.Application {
         'data_integrity'
       ]
     });
+  });
+
+  // ===== GATEWAY INTEGRATION (for bop-gateway) =====
+
+  // List all MCP tools
+  app.get('/api/tools', (_req: Request, res: Response) => {
+    const toolList = Object.entries(tools).map(([name, tool]) => ({
+      name,
+      description: tool.description,
+      inputSchema: {
+        type: 'object',
+        properties: tool.schema.shape ? Object.fromEntries(
+          Object.entries(tool.schema.shape).map(([key, val]: [string, any]) => [
+            key,
+            { type: val._def?.typeName?.replace('Zod', '').toLowerCase() || 'string', description: val.description }
+          ])
+        ) : {}
+      }
+    }));
+    res.json({ tools: toolList, count: toolList.length });
+  });
+
+  // Execute MCP tool via HTTP
+  app.post('/api/tools/:toolName', async (req: Request, res: Response) => {
+    const { toolName } = req.params;
+    const args = req.body.arguments || req.body;
+
+    const tool = tools[toolName as keyof typeof tools];
+    if (!tool) {
+      const availableTools = Object.keys(tools).join(', ');
+      res.status(404).json({ success: false, error: `Tool '${toolName}' not found. Available: ${availableTools}` });
+      return;
+    }
+
+    try {
+      const result = await tool.handler(args);
+      res.json({ success: true, result });
+    } catch (error) {
+      res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'Tool execution failed' });
+    }
   });
 
   // Enhanced error handler with proper classification and logging
