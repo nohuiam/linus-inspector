@@ -11,9 +11,11 @@ import { z } from 'zod';
 import { readFileSync, readdirSync, statSync, existsSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
-import { runAllInspections } from '../rules/index.js';
+import { runProfileAwareInspections, type ProfileAwareInspectionResult } from '../rules/index.js';
 import { checkMetaRules, type MetaViolation, type MetaInspectionContext } from '../rules/meta-rules.js';
 import { createInspection, createInspectionIssue, generateId } from '../database/index.js';
+import { detectServerProfile } from '../profiler/profile-detector.js';
+import type { ServerProfile, ServerType } from '../profiler/server-profile.js';
 
 // ============================================================================
 // Schema
@@ -65,6 +67,17 @@ export interface SelfInspectionResult {
   meta_issues: MetaViolation[];
   duration_ms: number;
   physician_healed: boolean;  // true if no critical/high meta-violations
+  // Profile-aware inspection info
+  profile?: {
+    type: ServerType;
+    hasExternalAPIs: boolean;
+    hasOAuth: boolean;
+    hasWebhooks: boolean;
+    hasDatabaseWrites: boolean;
+    isMCPServer: boolean;
+  };
+  skipped_categories?: Array<{ category: string; reason: string }>;
+  applied_categories?: string[];
 }
 
 // ============================================================================
@@ -156,6 +169,9 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
   // Get source files
   const files = getSourceFiles(selfPath);
 
+  // Detect own profile for context-aware rule filtering
+  const profile = await detectServerProfile(selfPath);
+
   if (files.length === 0) {
     return {
       inspection_id: inspectionId,
@@ -189,6 +205,10 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
   const allIssues: SelfInspectionResult['issues'] = [];
   const allMetaIssues: MetaViolation[] = [];
 
+  // Track profile-aware filtering results (same for all files)
+  let skippedCategories: Array<{ category: string; reason: string }> = [];
+  let appliedCategories: string[] = [];
+
   // Determine what this inspector checks
   const inspectionCategories = detectInspectionCategories(files);
 
@@ -199,14 +219,20 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
     inspection_categories: inspectionCategories
   };
 
-  // Inspect each file
+  // Inspect each file with profile-aware rule filtering
   for (const file of files) {
     try {
       const code = readFileSync(file, 'utf-8');
       const relativePath = file.replace(selfPath + '/', '');
 
-      // Run standard inspection rules
-      const result = runAllInspections(code, {});
+      // Run profile-aware inspection rules (skips inapplicable categories)
+      const result = runProfileAwareInspections(code, profile, {});
+
+      // Capture skipped/applied categories from first file (same for all)
+      if (skippedCategories.length === 0 && result.skipped_categories) {
+        skippedCategories = result.skipped_categories;
+        appliedCategories = result.applied_categories;
+      }
 
       // Collect issues from all categories
       for (const categoryResult of result.results) {
@@ -222,7 +248,7 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
         }
       }
 
-      // Run meta-rules if enabled
+      // Run meta-rules if enabled (these should always run for inspectors)
       if (params.include_meta_rules) {
         const metaViolations = checkMetaRules(code, metaContext);
         for (const violation of metaViolations) {
@@ -337,7 +363,18 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
     issues: allIssues,
     meta_issues: allMetaIssues,
     duration_ms: duration,
-    physician_healed: physicianHealed
+    physician_healed: physicianHealed,
+    // Profile-aware inspection info
+    profile: {
+      type: profile.type,
+      hasExternalAPIs: profile.hasExternalAPIs,
+      hasOAuth: profile.hasOAuth,
+      hasWebhooks: profile.hasWebhooks,
+      hasDatabaseWrites: profile.hasDatabaseWrites,
+      isMCPServer: profile.isMCPServer
+    },
+    skipped_categories: skippedCategories,
+    applied_categories: appliedCategories
   };
 }
 

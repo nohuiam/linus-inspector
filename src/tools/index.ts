@@ -63,6 +63,44 @@ import {
 } from '../database/index.js';
 import { inspectSelf, InspectSelfSchema, type SelfInspectionResult } from './inspect-self.js';
 import { detectServerProfile, type ServerProfile } from '../profiler/index.js';
+import { readFileSync, existsSync, readdirSync } from 'fs';
+import { join, extname } from 'path';
+
+/**
+ * Read all source code from a server directory
+ * Used by inspect_code_quality and inspect_security when given server_path
+ */
+async function readServerCode(serverPath: string): Promise<string> {
+  const codeFiles: string[] = [];
+
+  function walkDir(dir: string) {
+    if (!existsSync(dir)) return;
+    const entries = readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (!['node_modules', 'dist', 'build', '.git'].includes(entry.name)) {
+          walkDir(fullPath);
+        }
+      } else if (['.ts', '.js', '.tsx', '.jsx'].includes(extname(entry.name))) {
+        if (!entry.name.includes('.test.') && !entry.name.includes('.spec.')) {
+          codeFiles.push(fullPath);
+        }
+      }
+    }
+  }
+
+  walkDir(join(serverPath, 'src'));
+  if (codeFiles.length === 0) walkDir(serverPath); // Fallback to root
+
+  let code = '';
+  for (const file of codeFiles.slice(0, 20)) { // Limit to 20 files
+    try {
+      code += readFileSync(file, 'utf-8') + '\n';
+    } catch {}
+  }
+  return code;
+}
 
 // Tool schemas
 export const InspectBuildSchema = z.object({
@@ -367,12 +405,25 @@ export const tools = {
   /**
    * 9. Inspect Code Quality
    * Quick code analysis without full build context
+   * Accepts either code string or server_path
    */
   inspect_code_quality: {
-    description: 'Analyze code for quality issues',
-    schema: InspectCodeSchema,
-    handler: async (params: z.infer<typeof InspectCodeSchema>) => {
-      return quickInspect(params.code, {
+    description: 'Analyze code for quality issues. Provide either code string or server_path.',
+    schema: z.object({
+      code: z.string().optional().describe('Code to inspect directly'),
+      server_path: z.string().optional().describe('Path to server directory'),
+      vendor: z.string().optional().describe('SaaS vendor'),
+      regulation: z.string().optional().describe('Compliance regulation')
+    }),
+    handler: async (params: { code?: string; server_path?: string; vendor?: string; regulation?: string }) => {
+      let code = params.code;
+      if (!code && params.server_path) {
+        code = await readServerCode(params.server_path);
+      }
+      if (!code) {
+        return { success: false, error: 'Either code or server_path must be provided' };
+      }
+      return quickInspect(code, {
         vendor: params.vendor,
         regulation: params.regulation
       });
@@ -421,13 +472,24 @@ export const tools = {
   /**
    * 12. Inspect Security
    * Security audit for credentials, injection, etc.
+   * Accepts either code string or server_path
    */
   inspect_security: {
-    description: 'Security audit for hardcoded credentials, injection vulnerabilities',
-    schema: z.object({ code: z.string() }),
-    handler: async (params: { code: string }) => {
+    description: 'Security audit for hardcoded credentials, injection vulnerabilities. Provide either code string or server_path.',
+    schema: z.object({
+      code: z.string().optional().describe('Code to inspect directly'),
+      server_path: z.string().optional().describe('Path to server directory')
+    }),
+    handler: async (params: { code?: string; server_path?: string }) => {
+      let code = params.code;
+      if (!code && params.server_path) {
+        code = await readServerCode(params.server_path);
+      }
+      if (!code) {
+        return { success: false, error: 'Either code or server_path must be provided' };
+      }
       const { checkOAuthRules } = await import('../rules/oauth-rules.js');
-      const violations = checkOAuthRules(params.code);
+      const violations = checkOAuthRules(code);
 
       // Filter to security-relevant rules
       const securityIssues = violations.filter(v =>
@@ -630,27 +692,29 @@ export const tools = {
     description: 'Validate MCP server implementation',
     schema: z.object({ server_path: z.string() }),
     handler: async (params: { server_path: string }) => {
-      const { existsSync, readFileSync } = await import('fs');
-      const { join } = await import('path');
-
       const issues: Array<{ severity: string; issue: string; remedy: string }> = [];
 
-      // Check for index.ts/js
-      const indexTs = join(params.server_path, 'src', 'index.ts');
-      const indexJs = join(params.server_path, 'src', 'index.js');
+      // Check for index file in multiple locations
+      const indexLocations = [
+        join(params.server_path, 'src', 'index.ts'),
+        join(params.server_path, 'src', 'index.js'),
+        join(params.server_path, 'index.ts'),
+        join(params.server_path, 'index.js')
+      ];
 
-      if (!existsSync(indexTs) && !existsSync(indexJs)) {
+      const indexPath = indexLocations.find(p => existsSync(p));
+
+      if (!indexPath) {
         issues.push({
           severity: 'CRITICAL',
-          issue: 'Missing src/index.ts entry point',
-          remedy: 'Create src/index.ts with MCP server initialization'
+          issue: 'Missing index entry point (checked src/index.ts, src/index.js, index.ts, index.js)',
+          remedy: 'Create index.ts or index.js with MCP server initialization'
         });
       } else {
-        const indexPath = existsSync(indexTs) ? indexTs : indexJs;
         const content = readFileSync(indexPath, 'utf-8');
 
         // Check for MCP patterns
-        if (!/McpServer|createServer|Server/i.test(content)) {
+        if (!/McpServer|Server|createServer/i.test(content)) {
           issues.push({
             severity: 'HIGH',
             issue: 'MCP server initialization not found in index file',
@@ -658,27 +722,33 @@ export const tools = {
           });
         }
 
-        if (!/stdio|transport/i.test(content)) {
+        if (!/stdio|StdioServerTransport/i.test(content)) {
           issues.push({
-            severity: 'HIGH',
+            severity: 'MEDIUM',
             issue: 'No stdio transport detected',
             remedy: 'Use StdioServerTransport for Claude Desktop compatibility'
           });
         }
       }
 
-      // Check for tools directory
-      const toolsDir = join(params.server_path, 'src', 'tools');
-      if (!existsSync(toolsDir)) {
+      // Check for tools directory (reduced severity - not always required)
+      const toolsDirs = [
+        join(params.server_path, 'src', 'tools'),
+        join(params.server_path, 'tools')
+      ];
+
+      const hasToolsDir = toolsDirs.some(d => existsSync(d));
+      if (!hasToolsDir) {
         issues.push({
-          severity: 'MEDIUM',
-          issue: 'Missing src/tools directory',
-          remedy: 'Create src/tools/ with tool implementations'
+          severity: 'LOW',
+          issue: 'No dedicated tools directory found',
+          remedy: 'Consider organizing tools in src/tools/ directory (optional)'
         });
       }
 
       return {
-        verdict: issues.filter(i => i.severity === 'CRITICAL').length > 0 ? 'FAIL' : 'PASS',
+        verdict: issues.filter(i => i.severity === 'CRITICAL').length > 0 ? 'FAIL' :
+                 issues.filter(i => i.severity === 'HIGH').length > 0 ? 'PARTIAL' : 'PASS',
         issues
       };
     }
@@ -721,31 +791,73 @@ export const tools = {
     description: 'Check for test files',
     schema: z.object({ server_path: z.string() }),
     handler: async (params: { server_path: string }) => {
-      const { existsSync, readdirSync } = await import('fs');
+      const { existsSync, readdirSync, statSync } = await import('fs');
       const { join } = await import('path');
 
       const issues: Array<{ severity: string; issue: string; remedy: string }> = [];
-      const testsDir = join(params.server_path, 'tests');
 
-      if (!existsSync(testsDir)) {
+      // Check multiple common test directory patterns
+      const testDirPatterns = [
+        'tests',
+        'test',
+        '__tests__',
+        join('src', '__tests__'),
+        join('src', 'tests'),
+        join('src', 'test')
+      ];
+
+      let foundTestsDir: string | null = null;
+      for (const pattern of testDirPatterns) {
+        const testsDir = join(params.server_path, pattern);
+        if (existsSync(testsDir)) {
+          foundTestsDir = testsDir;
+          break;
+        }
+      }
+
+      if (!foundTestsDir) {
         issues.push({
           severity: 'HIGH',
           issue: 'Missing tests directory',
-          remedy: 'Create tests/ directory with test files'
+          remedy: 'Create tests/, test/, src/__tests__/, or __tests__/ directory with test files'
         });
         return { verdict: 'FAIL', test_files: [], issues };
       }
 
-      const testFiles = readdirSync(testsDir).filter(f =>
-        f.endsWith('.test.ts') || f.endsWith('.test.js') ||
-        f.endsWith('.spec.ts') || f.endsWith('.spec.js')
-      );
+      // Recursively find test files
+      const findTestFiles = (dir: string): string[] => {
+        const files: string[] = [];
+        try {
+          const entries = readdirSync(dir);
+          for (const entry of entries) {
+            const fullPath = join(dir, entry);
+            try {
+              const stat = statSync(fullPath);
+              if (stat.isDirectory()) {
+                files.push(...findTestFiles(fullPath));
+              } else if (
+                entry.endsWith('.test.ts') || entry.endsWith('.test.js') ||
+                entry.endsWith('.spec.ts') || entry.endsWith('.spec.js')
+              ) {
+                files.push(entry);
+              }
+            } catch {
+              // Skip inaccessible entries
+            }
+          }
+        } catch {
+          // Directory read failed
+        }
+        return files;
+      };
+
+      const testFiles = findTestFiles(foundTestsDir);
 
       if (testFiles.length === 0) {
         issues.push({
           severity: 'HIGH',
           issue: 'No test files found',
-          remedy: 'Add .test.ts or .spec.ts files in tests/ directory'
+          remedy: 'Add .test.ts or .spec.ts files in tests directory'
         });
       }
 

@@ -6,7 +6,7 @@
  * health endpoints, MCP protocol, and dependencies.
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { generateId } from '../database/index.js';
 
@@ -83,8 +83,14 @@ function checkInterlockConfig(serverPath: string): {
     return { valid: false, peers: [], signals: { emits: [], receives: [] }, issues };
   }
 
-  // Check for required fields
-  if (!config.ports?.udp) {
+  // Check for required fields - support multiple port formats
+  // Format 1: ports.udp / ports.http
+  // Format 2: port / http_port / websocket_port (root level)
+  // Format 3: server.port / server.httpPort / server.wsPort
+  const udpPort = config.ports?.udp || config.port || config.server?.port;
+  const httpPort = config.ports?.http || config.http_port || config.server?.httpPort;
+
+  if (!udpPort) {
     issues.push({
       severity: 'HIGH',
       category: 'interlock',
@@ -93,7 +99,7 @@ function checkInterlockConfig(serverPath: string): {
     });
   }
 
-  if (!config.ports?.http) {
+  if (!httpPort) {
     issues.push({
       severity: 'HIGH',
       category: 'interlock',
@@ -102,7 +108,9 @@ function checkInterlockConfig(serverPath: string): {
     });
   }
 
-  if (!config.server?.name) {
+  // Check for server name - support multiple formats
+  const serverName = config.server?.name || config.server_id || config.name;
+  if (!serverName) {
     issues.push({
       severity: 'MEDIUM',
       category: 'interlock',
@@ -111,8 +119,13 @@ function checkInterlockConfig(serverPath: string): {
     });
   }
 
-  // Extract peers
-  const peers = (config.peers || []).map((p: any) => p.name || p);
+  // Extract peers - support both 'peers' array and 'connections' object formats
+  let peers: string[] = [];
+  if (config.peers && Array.isArray(config.peers)) {
+    peers = config.peers.map((p: any) => p.name || p);
+  } else if (config.connections && typeof config.connections === 'object') {
+    peers = Object.keys(config.connections);
+  }
 
   // Extract signals
   const emits = (config.signals?.emits || []).map((s: any) => s.name || s);
@@ -120,7 +133,7 @@ function checkInterlockConfig(serverPath: string): {
 
   return {
     valid: issues.filter(i => i.severity === 'CRITICAL').length === 0,
-    port: config.ports?.udp,
+    port: udpPort,
     peers,
     signals: { emits, receives },
     issues
@@ -227,10 +240,9 @@ function detectMcpTools(serverPath: string): string[] {
     return tools;
   }
 
-  // Try to read tool files
+  // Read tool files using top-level imported readdirSync
   try {
-    const { readdirSync } = require('fs');
-    const files = readdirSync(toolsDir);
+    const files = readdirSync(toolsDir, { encoding: 'utf-8' });
 
     for (const file of files) {
       if (file.endsWith('.ts') || file.endsWith('.js')) {
@@ -243,8 +255,9 @@ function detectMcpTools(serverPath: string): string[] {
         }
       }
     }
-  } catch {
-    // Directory read failed
+  } catch (err) {
+    // Directory read failed - log for debugging
+    console.error('detectMcpTools error:', err);
   }
 
   return tools;
