@@ -274,6 +274,60 @@ describe('Integration Checker', () => {
   });
 });
 
+describe('MCP Tools Detection', () => {
+  it('should detect tools from skill-builder (server.httpPort format)', () => {
+    // skill-builder has separate tool files AND defines tools in index.ts
+    const result = checkIntegration({
+      server_path: '/Users/macbook/Documents/claude_home/repo/skill-builder'
+    });
+    // Should detect tools
+    expect(result.checks.mcp_tools.length).toBeGreaterThan(0);
+    // skill-builder has 8 tools
+    expect(result.checks.mcp_tools.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('should detect tools from linus-inspector (object keys format)', () => {
+    // linus-inspector defines tools as object keys in index.ts
+    const result = checkIntegration({
+      server_path: '/Users/macbook/Documents/claude_home/repo/linus-inspector'
+    });
+    // Should detect many tools (26+)
+    expect(result.checks.mcp_tools.length).toBeGreaterThan(20);
+  });
+
+  it('should detect tools from verifier-mcp (http_port format)', () => {
+    const result = checkIntegration({
+      server_path: '/Users/macbook/Documents/claude_home/repo/verifier-mcp'
+    });
+    // verifier-mcp should have tools
+    expect(result.checks.mcp_tools.length).toBeGreaterThan(0);
+    // Should also have valid interlock config
+    expect(result.checks.interlock_valid).toBe(true);
+  });
+
+  it('should not flag missing ports for valid configs', () => {
+    // Test skill-builder which uses server.port format
+    const result1 = checkIntegration({
+      server_path: '/Users/macbook/Documents/claude_home/repo/skill-builder'
+    });
+    const portIssues1 = result1.issues.filter(i =>
+      i.issue.toLowerCase().includes('missing') &&
+      (i.issue.toLowerCase().includes('port') || i.issue.toLowerCase().includes('http'))
+    );
+    expect(portIssues1.length).toBe(0);
+
+    // Test verifier-mcp which uses root-level port format
+    const result2 = checkIntegration({
+      server_path: '/Users/macbook/Documents/claude_home/repo/verifier-mcp'
+    });
+    const portIssues2 = result2.issues.filter(i =>
+      i.issue.toLowerCase().includes('missing') &&
+      (i.issue.toLowerCase().includes('port') || i.issue.toLowerCase().includes('http'))
+    );
+    expect(portIssues2.length).toBe(0);
+  });
+});
+
 describe('Inspector Result Format', () => {
   it('should return consistent result format', () => {
     const promptResult = inspectPrompt({

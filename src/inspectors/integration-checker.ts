@@ -231,6 +231,11 @@ function checkPackageJson(serverPath: string): {
 
 /**
  * Detect MCP tools from source code
+ *
+ * Supports multiple patterns:
+ * 1. Tools defined in index.ts as array: { name: 'tool_name', ... }
+ * 2. Tools defined in index.ts as object: export const tools = { tool_key: ... }
+ * 3. Separate tool files (fallback): create-skill.ts -> create_skill
  */
 function detectMcpTools(serverPath: string): string[] {
   const tools: string[] = [];
@@ -240,7 +245,56 @@ function detectMcpTools(serverPath: string): string[] {
     return tools;
   }
 
-  // Read tool files using top-level imported readdirSync
+  // Try to parse index.ts first for inline tool definitions
+  const indexPath = join(toolsDir, 'index.ts');
+  const indexPathJs = join(toolsDir, 'index.js');
+  const actualIndexPath = existsSync(indexPath) ? indexPath : (existsSync(indexPathJs) ? indexPathJs : null);
+
+  if (actualIndexPath) {
+    try {
+      const content = readFileSync(actualIndexPath, 'utf-8');
+
+      // Pattern 1: Tools array with name property: { name: 'tool_name', ... }
+      // This handles: export const tools: Tool[] = [{ name: 'create_skill', ... }]
+      const namePattern = /\{\s*name:\s*['"]([^'"]+)['"]/g;
+      let match;
+      while ((match = namePattern.exec(content)) !== null) {
+        const toolName = match[1];
+        if (!tools.includes(toolName)) {
+          tools.push(toolName);
+        }
+      }
+
+      // Pattern 2: Tools object with keys: export const tools = { inspect_build: {...}, ... }
+      // This handles linus-inspector style where tools are object keys
+      if (tools.length === 0) {
+        // Match: export const tools = { key1: {...}, key2: {...} }
+        // We need to find tool keys that look like handler definitions
+        const toolObjectPattern = /export\s+const\s+tools\s*=\s*\{/;
+        if (toolObjectPattern.test(content)) {
+          // Extract tool keys - they appear as: tool_name: { description: ..., schema: ..., handler: ... }
+          // Match pattern: word followed by colon and opening brace with description/schema/handler
+          const keyPattern = /^\s*([a-z][a-z0-9_]*)\s*:\s*\{[^}]*(?:description|schema|handler)/gm;
+          let keyMatch;
+          while ((keyMatch = keyPattern.exec(content)) !== null) {
+            const toolName = keyMatch[1];
+            if (!tools.includes(toolName)) {
+              tools.push(toolName);
+            }
+          }
+        }
+      }
+
+      // If we found tools from index.ts, return them
+      if (tools.length > 0) {
+        return tools;
+      }
+    } catch (err) {
+      // Index parsing failed, fall through to file scanning
+    }
+  }
+
+  // Fallback: Scan separate tool files (original behavior)
   try {
     const files = readdirSync(toolsDir, { encoding: 'utf-8' });
 
@@ -251,13 +305,14 @@ function detectMcpTools(serverPath: string): string[] {
           const toolName = file
             .replace(/\.(ts|js)$/, '')
             .replace(/-/g, '_');
-          tools.push(toolName);
+          if (!tools.includes(toolName)) {
+            tools.push(toolName);
+          }
         }
       }
     }
   } catch (err) {
-    // Directory read failed - log for debugging
-    console.error('detectMcpTools error:', err);
+    // Directory read failed
   }
 
   return tools;
