@@ -100,6 +100,26 @@ export async function detectServerProfile(serverPath: string): Promise<ServerPro
  * Gather all context needed for detection
  */
 async function gatherContext(serverPath: string): Promise<DetectionContext> {
+  // Default ignore patterns
+  const ignorePatterns = [
+    '**/node_modules/**',
+    '**/dist/**',
+    '**/build/**',
+    '**/*.test.*',
+    '**/*.spec.*'
+  ];
+
+  // Read config for additional exclusions (profiling.exclude_paths)
+  try {
+    const configPath = join(serverPath, 'config', 'interlock.json');
+    const configData = JSON.parse(readFileSync(configPath, 'utf-8'));
+    if (configData.profiling?.exclude_paths && Array.isArray(configData.profiling.exclude_paths)) {
+      ignorePatterns.push(...configData.profiling.exclude_paths);
+    }
+  } catch {
+    // No config or no profiling section - use defaults only
+  }
+
   // Get all source files
   const patterns = ['**/*.ts', '**/*.js', '**/*.tsx', '**/*.jsx'];
   const files: string[] = [];
@@ -107,7 +127,7 @@ async function gatherContext(serverPath: string): Promise<DetectionContext> {
   for (const pattern of patterns) {
     const matches = await glob(pattern, {
       cwd: serverPath,
-      ignore: ['**/node_modules/**', '**/dist/**', '**/build/**', '**/*.test.*', '**/*.spec.*']
+      ignore: ignorePatterns
     });
     files.push(...matches.map(f => join(serverPath, f)));
   }

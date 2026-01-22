@@ -4,6 +4,18 @@
     "version": "1.0.0",
     "description": "Brutal quality gate for neurogenesis-generated servers"
   },
+  "profiling": {
+    "exclude_paths": [
+      "**/rules/**",
+      "**/profiler/**",
+      "**/inspectors/**",
+      "**/tools/**",
+      "**/http/**",
+      "**/database/**",
+      "src/index.ts"
+    ],
+    "exclude_reason": "Inspection infrastructure files contain patterns and category names for detecting capabilities in other servers, not actual server capabilities"
+  },
   "ports": {
     "udp": 3037,
     "http": 8037,
