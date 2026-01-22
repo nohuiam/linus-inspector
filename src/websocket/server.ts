@@ -35,11 +35,14 @@ export function createWebSocketServer(httpServer: Server): WebSocketServer {
       try {
         const data = JSON.parse(message.toString());
         handleClientMessage(ws, data);
-      } catch (error) {
+      } catch (error: any) {
+        const rawMessage = message.toString();
+        console.error('[WebSocket] Invalid JSON from client:', error.message);
+        console.error('[WebSocket] Raw message (first 200 chars):', rawMessage.substring(0, 200));
         ws.send(JSON.stringify({
           type: 'error',
           timestamp: new Date().toISOString(),
-          data: { message: 'Invalid JSON message' }
+          data: { message: 'Invalid JSON message', detail: error.message }
         }));
       }
     });

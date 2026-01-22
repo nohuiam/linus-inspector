@@ -54,10 +54,12 @@ function loadConfig(): any {
       },
       peers: rawConfig.peers || []
     };
-  } catch (error) {
-    console.error('Failed to load config:', error);
+  } catch (error: any) {
+    console.error('[Config] Failed to load config from:', configPath);
+    console.error('[Config] Error:', error.message || error);
+    console.error('[Config] Using defaults - this may cause issues if config was expected');
     return {
-      server: { name: 'linus-inspector', udp_port: 3033, http_port: 8033, ws_port: 9033 },
+      server: { name: 'linus-inspector', udp_port: 3037, http_port: 8037, ws_port: 9037 },
       peers: []
     };
   }

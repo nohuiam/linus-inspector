@@ -228,16 +228,27 @@ export const META_RULES: MetaRule[] = [
     severity: 'HIGH',
     irony_level: 'maximum',
     applies_to: ['inspector'],
-    check: (code: string, context: MetaInspectionContext): MetaViolation[] => {
+    check: (code: string, _context: MetaInspectionContext): MetaViolation[] => {
       const violations: MetaViolation[] = [];
 
-      const checksCompliance = context.inspection_categories?.includes('compliance') ||
-                               /compliance|hipaa|gdpr|soc2|pci/i.test(code);
+      // Only flag files that ACTIVELY PERFORM compliance operations:
+      // - Files that run compliance rules/checks
+      // - Files that evaluate compliance status
+      // Don't flag every file just because the inspector has compliance capabilities.
+      //
+      // Skip rule definition files, type definitions, and files that just reference terms
+      const isRuleDefinitionFile = /export\s+(const|let)\s+\w*RULES\s*[=:]/i.test(code) ||
+                                    /MetaRule\[\]|ComplianceRule\[\]|interface\s+\w*Rule/i.test(code);
+      if (isRuleDefinitionFile) return violations;
 
-      if (!checksCompliance) return violations;
+      // Check if this file actually PERFORMS compliance checking (not just defines/references it)
+      const performsComplianceCheck = /runComplianceCheck|checkCompliance|evaluateCompliance|complianceResult/i.test(code) &&
+                                       /function|async|=>/i.test(code);  // Must be executable code
 
-      // Check for audit logging
-      const hasAuditLogging = /audit[_-]?log|logAudit|createAuditEntry/i.test(code);
+      if (!performsComplianceCheck) return violations;
+
+      // For files that actively perform compliance checks, they should have audit logging
+      const hasAuditLogging = /audit[_-]?log|logAudit|createAuditEntry|recordAudit/i.test(code);
       if (!hasAuditLogging) {
         violations.push({
           rule_id: 'meta-006',
@@ -253,35 +264,26 @@ export const META_RULES: MetaRule[] = [
     }
   },
 
-  {
-    id: 'meta-007',
-    name: 'Test Inspector Without Tests',
-    description: 'An inspector that checks test coverage should have good test coverage',
-    severity: 'MEDIUM',
-    irony_level: 'high',
-    applies_to: ['inspector'],
-    check: (_code: string, context: MetaInspectionContext): MetaViolation[] => {
-      const violations: MetaViolation[] = [];
-
-      // This is checked at the project level, not code level
-      // For now, just flag if it's a test inspector
-      const checksTests = context.inspection_categories?.includes('test_coverage');
-
-      if (checksTests) {
-        // This would need filesystem access to check - placeholder
-        violations.push({
-          rule_id: 'meta-007',
-          severity: 'LOW',
-          issue: 'Test coverage inspector should maintain >80% coverage itself',
-          remedy: 'Ensure inspector has comprehensive test coverage',
-          irony_level: 'high',
-          auto_fixable: false
-        });
-      }
-
-      return violations;
-    }
-  },
+  // NOTE: meta-007 disabled - it was a placeholder that fired unconditionally
+  // without actually checking test coverage. Re-enable when real coverage
+  // detection is implemented (requires filesystem access at project level).
+  // {
+  //   id: 'meta-007',
+  //   name: 'Test Inspector Without Tests',
+  //   description: 'An inspector that checks test coverage should have good test coverage',
+  //   severity: 'MEDIUM',
+  //   irony_level: 'high',
+  //   applies_to: ['inspector'],
+  //   check: (_code: string, context: MetaInspectionContext): MetaViolation[] => {
+  //     const violations: MetaViolation[] = [];
+  //     const checksTests = context.inspection_categories?.includes('test_coverage');
+  //     if (checksTests) {
+  //       // This would need filesystem access to check actual coverage
+  //       violations.push({...});
+  //     }
+  //     return violations;
+  //   }
+  // },
 
   {
     id: 'meta-008',

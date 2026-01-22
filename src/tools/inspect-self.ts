@@ -164,7 +164,6 @@ function detectInspectionCategories(files: string[]): string[] {
 export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspectionResult> {
   const startTime = Date.now();
   const selfPath = getSelfPath();
-  const inspectionId = generateId('self-insp');
 
   // Get source files
   const files = getSourceFiles(selfPath);
@@ -174,7 +173,7 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
 
   if (files.length === 0) {
     return {
-      inspection_id: inspectionId,
+      inspection_id: generateId('self-insp'),  // Not stored in DB, just for response
       server_name: 'linus-inspector',
       server_path: selfPath,
       verdict: 'BLOCKED',
@@ -306,8 +305,10 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
   const duration = Date.now() - startTime;
 
   // Store in database
+  let storedInspectionId = generateId('self-insp'); // Fallback if DB fails
   try {
-    createInspection({
+    // Capture returned inspection to get the actual DB-generated ID
+    const inspection = createInspection({
       build_id: `self-${Date.now()}`,
       server_name: 'linus-inspector',
       server_type: 'inspector',
@@ -321,11 +322,12 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
       auto_fixes_available: summary.auto_fixable,
       auto_fixes_applied: 0
     });
+    storedInspectionId = inspection.id;
 
-    // Store issues
+    // Store issues using the actual inspection ID from the database
     for (const issue of allIssues.slice(0, 100)) { // Limit to 100
       createInspectionIssue({
-        inspection_id: inspectionId,
+        inspection_id: inspection.id,
         severity: issue.severity as any,
         category: issue.category,
         location: issue.file,
@@ -339,7 +341,7 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
     // Store meta-issues as a special category
     for (const issue of allMetaIssues) {
       createInspectionIssue({
-        inspection_id: inspectionId,
+        inspection_id: inspection.id,
         severity: issue.severity,
         category: 'meta_inspection',
         location: 'self',
@@ -355,7 +357,7 @@ export async function inspectSelf(params: InspectSelfParams): Promise<SelfInspec
   }
 
   return {
-    inspection_id: inspectionId,
+    inspection_id: storedInspectionId,
     server_name: 'linus-inspector',
     server_path: selfPath,
     verdict,
